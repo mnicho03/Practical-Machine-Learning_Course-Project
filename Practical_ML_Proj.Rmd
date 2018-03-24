@@ -1,0 +1,197 @@
+---
+title: "Practical ML Project - Classifying Manner of Exercises"
+author: "Michael Nichols"
+date: "March 23, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy=TRUE, tidy.opts=list(width.cutoff=60))
+```
+
+### Executive Summary
+The goal of the project is to predict the manner in which individuals did a certain exercise. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+### Target Variable
+The outcome variable is classe, a factor variable with 5 levels. For this data set, "participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in 5 different fashions:
+
+- exactly according to the specification (Class A)
+- throwing the elbows to the front (Class B)
+- lifting the dumbbell only halfway (Class C)
+- lowering the dumbbell only halfway (Class D)
+- throwing the hips to the front (Class E)
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes." 
+
+Prediction evaluations will be based on maximizing the accuracy and minimizing the out-of-sample error. All other available variables after cleaning will be used for prediction.
+
+# Findings
+
+## Basic Steps to Build the Model: 
+0. "Set the seed." Ensure reproducibility for the model.
+
+1. Read in the dataset
+
+2A. Preserve only the variables that included data in at least 98% of records. This removed 100 variables. (160 to 60)
+
+2B. Remove 7 additional variables that did not appear to have any predictive value. This included things like name and times of the records.
+
+3. Partition the dataset. The original data came in two CSV files, one 
+labeled 'training' and one labeled 'testing.' The test dataset included the final 20 questions for the final evaluation. In order to build the model without overfitting, I split the training set randomly in a 70/30 split into a training subset and validation set. This validation is used to test the accuracy of the models. 
+
+4. Build & train the models! By attempting to predict the classe, the proper algorithm to use for the model needed to work with factor variables. (i.e. a classification problem) With this in mind, I built two models and compared the prediction accuracy of each to decide the best fit.
+
+4A. Attempt 1 - Random Forest. Out-of-the-box random forest model from the randomForest R package produced the greatest accuracy. 
+
+4B. Attempt 2 - Generalized Boosted Model. Despite using custom tuning parameters (3-fold cross validation), this model did not perform as well as the random forest model. This model's accuracy was 96.18%.
+
+5. Test each model against the validation set and examine the accuracy.
+
+6. Predict using the best model (Random Forest) against the test set.
+
+# Prediction Results using a Random Forest model: 
+Accuracy: 99.42%
+Out of Sample Error Rate: .58%
+
+### Problem Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Environment Setup: load dataset, R packages, & ensure reproducibility
+```{r environment_setup, warning=FALSE, message=FALSE}
+#set working directory
+setwd("S:/Documents/R")
+
+#load R packages
+library(data.table) # for quick file reading
+library(caret) # for model building - ideal for classification & regression problems
+library(randomForest) # for efficient random forest model building
+
+set.seed(16) # for reproducibility 
+
+#download train/test datasets for evaluation
+training <- fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+
+#test dataset to be used for final evaluation only & will be ignored for all model building
+testing <- fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+### Initial Exploration & Cleansing
+```{r data_prep}
+#evaluate datasets
+dim(training)
+dim(testing) 
+#as expected, test dataset contains 20 records for final evaluation
+
+#convert to DF's
+training <- as.data.frame(training)
+testing <- as.data.frame(testing)
+
+#Remove columns with >= 98% of NA or "" values
+relevant_Columns <- !apply(training, 2, function(x) sum(is.na(x)) > .98  || sum(x=="") > .98)
+training <- training[, relevant_Columns]
+testing <- testing[,relevant_Columns]
+
+#convert target variable to factor
+training$classe <- as.factor(training$classe)
+#include classe in testing set as NA
+testing$classe <- NA
+
+#review training and test sets again to remove additional unneeded columns
+# names(testing) # first seven variables can be removed based on our goal (times, username, etc.)
+# names(training)
+testing[,1:7] <- NULL 
+training[,1:7] <- NULL
+
+#show final dataset dimensions ~ over 100 unneccessary variables removed
+dim(training)
+dim(testing)
+```
+
+### Prepare cross validation
+Since we already have the final test set, we'll create a validation set within the training dataset using a 70/30 random split.
+```{r cross_val}
+inValidation <- createDataPartition(y = training$classe, p = .7, list = FALSE)
+TrainingSet <- training[inValidation,]
+ValidationSet <- training[-inValidation,]
+
+dim(TrainingSet)
+dim(ValidationSet)
+```
+
+```{r explore, echo=FALSE}
+#show breakdown of the classy variable (e.g. A = exercised performed as intended)
+histogram(TrainingSet$classe, col = "blue", xlab = "Classe ~ Target Variable")
+summary(TrainingSet$classe)
+```
+
+### Algorith Attempt #1 --> Random Forest
+```{r randomForest}
+#Algorithm 1: Random Forest
+#build the model
+modFit_RF <- randomForest(classe ~ ., data = TrainingSet, ntree = 100, mtry = 16)
+
+#predict using decision tree model against validation set
+prediction_RF <-  predict(modFit_RF, ValidationSet)
+
+#review accuracy against the validation set
+confusionMatrix(prediction_RF, ValidationSet$classe)
+```
+
+### Algorithm Attempt #2 --> Generalized Boosted Model
+```{r GBM}
+#Algorithm 2: Generalized Boosted Model
+#Tune the model: 
+# utilize 3-fold cross validation to further break apart the training set and determine best model settings
+# with GBM, the 3 tuning parameters checked will be trees, shrinkage, and interaction depth.
+objControl <- trainControl(method='cv', number=3, returnResamp='none', classProbs = TRUE)
+
+#train the model 
+modFit_GBM <- train(classe ~.,
+                  data = TrainingSet,
+                  method='gbm', 
+                  trControl=objControl,  
+                  metric = "Accuracy",
+                  preProc = c("center", "scale"))
+
+#predict using GBM on the validation set
+prediction_GBM <- predict(modFit_GBM, ValidationSet)
+
+#review accuracy against the validation set
+confusionMatrix(prediction_GBM, ValidationSet$classe)
+```
+
+Both models perform extremely well, but across the board, the random forest model outperforms the generalized boosted model. The final accuracy of the RF model against the validation set exceeds 99%.
+```{r modelComparison, echo=FALSE}
+#compare models
+modelComp <- data.frame(rbind(confusionMatrix(prediction_RF, ValidationSet$classe)$overall, confusionMatrix(prediction_GBM, ValidationSet$classe)$overall))
+
+rownames(modelComp) <- c("RF", "GBM")
+print(modelComp) # across the board, the random forest model outperforms the generalized boosted model
+```
+
+### Final Prediction / Quiz
+```{r FinalPredictions}
+predict(modFit_RF, testing)
+```
+
+## Appendix
+### Plot 1: displays model accuracy increases across cross validation sets as boosting iterations rise
+```{r Appendix_Visualizations, echo=FALSE}
+#visualizations
+plot(modFit_GBM)
+```
+
+### Plot 2: displays decreasing model error rate as # of trees expands
+```{r Appendix2, echo=FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+plot(modFit_RF)
+legend("topright", colnames(modFit_RF$err.rate), col = 1:5, cex=.8, fill = 1:5)
+```
+
+### Plot 3: displays top 10 most important variables based on predictions for each outcome variable option
+```{r Appendix3, echo=FALSE}
+varImp_GBM <- varImp(modFit_GBM, useModel = FALSE)
+plot(varImp_GBM, top = 10)
+```
